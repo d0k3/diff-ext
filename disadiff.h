@@ -8,11 +8,11 @@
 // http://3dbrew.org/wiki/DISA_and_DIFF
 // https://github.com/wwylele/3ds-save-tool
 
-#define DISA_MAGIC  'D', 'I', 'S', 'A', '0x00', '0x00', '0x04', '0x00'
-#define DIFF_MAGIC  'D', 'I', 'F', 'F', '0x00', '0x00', '0x03', '0x00'
-#define IVFC_MAGIC  'I', 'V', 'F', 'C', '0x00', '0x00', '0x02', '0x00'
-#define DPFS_MAGIC  'D', 'P', 'F', 'S', '0x00', '0x00', '0x01', '0x00'
-#define DIFI_MAGIC  'D', 'I', 'F', 'I', '0x00', '0x00', '0x01', '0x00'
+#define DISA_MAGIC  'D', 'I', 'S', 'A', 0x00, 0x00, 0x04, 0x00
+#define DIFF_MAGIC  'D', 'I', 'F', 'F', 0x00, 0x00, 0x03, 0x00
+#define IVFC_MAGIC  'I', 'V', 'F', 'C', 0x00, 0x00, 0x02, 0x00
+#define DPFS_MAGIC  'D', 'P', 'F', 'S', 0x00, 0x00, 0x01, 0x00
+#define DIFI_MAGIC  'D', 'I', 'F', 'I', 0x00, 0x00, 0x01, 0x00
 
 
 typedef struct {
@@ -56,7 +56,7 @@ typedef struct {
     u64 offset_dpfs; // always 0xBC
     u64 size_dpfs; // always 0x50
     u64 offset_hash; // always 0x10C
-    u64 size_hash; // always 0x20
+    u64 size_hash; // may include padding
     u8  ivfc_use_extlvl4;
     u8  dpfs_lvl1_selector;
     u8  padding[2];
@@ -65,7 +65,7 @@ typedef struct {
 
 typedef struct {
     u8  magic[8]; // "IVFC" 0x00020000
-    u64 size_hash; // same as the one in DIFI, 0x20
+    u64 size_hash; // same as the one in DIFI, may include padding
     u64 offset_lvl1;
     u64 size_lvl1;
     u32 log_lvl1;
@@ -107,3 +107,19 @@ typedef struct {
     u8 hash[0x20];
     u8 padding[4]; // all zeroes when encrypted
 } __attribute__((packed)) DifiStruct;
+
+// condensed info to enable reading IVFC lvl4
+typedef struct {
+    u32 offset_dpfs_lvl1; // relative to start of file
+    u32 offset_dpfs_lvl2; // relative to start of file
+    u32 offset_dpfs_lvl3; // relative to start of file
+    u32 size_dpfs_lvl1;
+    u32 size_dpfs_lvl2;
+    u32 size_dpfs_lvl3;
+    u32 log_dpfs_lvl2;
+    u32 log_dpfs_lvl3;
+    u32 offset_ivfc_lvl4; // relative to DPFS lvl3 if not external
+    u32 size_ivfc_lvl4;
+    u8  dpfs_lvl1_selector;
+    u8  ivfc_use_extlvl4;
+} __attribute__((packed)) DisaDiffReaderInfo;

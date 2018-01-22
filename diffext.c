@@ -172,6 +172,11 @@ int main(int argc, char** argv) {
     if (!getDisaDiffReaderInfo(&info, buffer_in, fsize, false)) return 1;
     printf("OK\n");
     
+    printf("DPFS lvl1: 0x%08X byte @ 0x%08X / presel: %u\n", info.size_dpfs_lvl1, info.offset_dpfs_lvl1, (u32) info.dpfs_lvl1_selector);
+    printf("DPFS lvl2: 0x%08X byte @ 0x%08X / blocks: %u\n", info.size_dpfs_lvl2, info.offset_dpfs_lvl2, 1 << info.log_dpfs_lvl2);
+    printf("DPFS lvl3: 0x%08X byte @ 0x%08X / blocks: %u\n", info.size_dpfs_lvl3, info.offset_dpfs_lvl3, 1 << info.log_dpfs_lvl3);
+    printf("IVFC lvl4: 0x%08X byte @ 0x%08X / %sternal\n", info.size_ivfc_lvl4, info.offset_ivfc_lvl4, (info.ivfc_use_extlvl4) ? "ex" : "in");
+    
     printf("Read IVFC lvl4... ");
     if (!readIvfcLvl4(buffer_out, buffer_in, &info, 0, info.size_ivfc_lvl4)) return 1;
     printf("%u kiB\n", info.size_ivfc_lvl4 / 1024);

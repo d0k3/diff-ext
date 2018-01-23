@@ -122,4 +122,5 @@ typedef struct {
     u32 size_ivfc_lvl4;
     u8  dpfs_lvl1_selector;
     u8  ivfc_use_extlvl4;
+    u8* dpfs_lvl2_cache; // optional, NULL when unused
 } __attribute__((packed)) DisaDiffReaderInfo;

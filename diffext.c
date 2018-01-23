@@ -12,10 +12,10 @@
 #include "types.h"
 
 #define BUFFER_SIZE (64*1024*1024)
-#define GET_DPFS_BIT(b, lvl) (((((u32*) lvl)[b >> 5]) >> (31 - (b % 32))) & 1)
+#define GET_DPFS_BIT(b, lvl) (((((u32*) (void*) lvl)[b >> 5]) >> (31 - (b % 32))) & 1)
 
 
-u32 readIvfcLvl4(u8* output, const u8* data, const DisaDiffReaderInfo* info, u32 offset, u32 size) {
+u32 readIvfcLvl4Old(u8* output, const u8* data, const DisaDiffReaderInfo* info, u32 offset, u32 size) {
     // data: full DISA/DIFF file in memory
     // offset: offset inside IVFC lvl4
     
@@ -30,12 +30,14 @@ u32 readIvfcLvl4(u8* output, const u8* data, const DisaDiffReaderInfo* info, u32
     }
     
     // full reading below
+    u32 offset_in_lvl3 = info->offset_ivfc_lvl4 + offset;
+    
     u8* lvl1 = (u8*) data + info->offset_dpfs_lvl1;
     if (info->dpfs_lvl1_selector) lvl1 += info->size_dpfs_lvl1;
     
     for (u32 i = 0; i < size; i++) {
         // idx_lvl2 & idx_lvl1 are bit offsets
-        u32 idx_lvl2 = (offset + info->offset_ivfc_lvl4 + i) >> info->log_dpfs_lvl3;
+        u32 idx_lvl2 = (offset_in_lvl3 + i) >> info->log_dpfs_lvl3;
         u32 idx_lvl1 = (idx_lvl2 >> 3) >> info->log_dpfs_lvl2;
         
         u8* lvl2 = (u8*) data + info->offset_dpfs_lvl2;
@@ -49,6 +51,72 @@ u32 readIvfcLvl4(u8* output, const u8* data, const DisaDiffReaderInfo* info, u32
     }
     
     return size;
+}
+
+u32 readIvfcLvl4(u8* output, const u8* data, const DisaDiffReaderInfo* info, u32 offset, u32 size) {
+    // data: full DISA/DIFF file in memory
+    // offset: offset inside IVFC lvl4
+    
+    // sanity checks - offset & size
+    if (offset > info->size_ivfc_lvl4) return 0;
+    else if (offset + size > info->size_ivfc_lvl4) size = info->size_ivfc_lvl4 - offset;
+    
+    // quick reading in case of external IVFC lvl4
+    if (info->ivfc_use_extlvl4) {
+        u8* data_lvl4 = (u8*) data + info->offset_ivfc_lvl4;
+        memcpy(output, data_lvl4 + offset, size);
+    }
+    
+    // full reading below
+    u32 offset_in_lvl3 = info->offset_ivfc_lvl4 + offset;
+    u8* lvl2 = info->dpfs_lvl2_cache;
+    if (!lvl2) return 0;
+    
+    for (u32 i = 0; i < size; i++) {
+        // idx_lvl2 is a bit offset
+        u32 idx_lvl2 = (offset_in_lvl3 + i) >> info->log_dpfs_lvl3;
+        
+        u8* lvl3 = (u8*) data + info->offset_dpfs_lvl3;
+        if (GET_DPFS_BIT(idx_lvl2, lvl2)) lvl3 += info->size_dpfs_lvl3;
+        
+        u8* data_lvl4 = lvl3 + info->offset_ivfc_lvl4;
+        output[i] = data_lvl4[offset + i];
+    }
+    
+    return size;
+}
+
+bool buildDpfsLvl2Cache(DisaDiffReaderInfo* info, const void* data, u8* cache, u32 cache_size) {
+    const u32 min_cache_bits = (info->size_dpfs_lvl3 + (1 << info->log_dpfs_lvl3) - 1) >> info->log_dpfs_lvl3;
+    const u32 min_cache_size = ((min_cache_bits + 31) >> (3 + 2)) << 2;
+    const u8* lvl1 = (u8*) data + info->offset_dpfs_lvl1 + ((info->dpfs_lvl1_selector) ? info->size_dpfs_lvl1 : 0);
+    const u8* lvl2_0 = (u8*) data + info->offset_dpfs_lvl2;
+    const u8* lvl2_1 = lvl2_0 + info->size_dpfs_lvl2;
+    
+    // safety
+    if (info->ivfc_use_extlvl4 ||
+        (cache_size < min_cache_size) ||
+        (min_cache_size > info->size_dpfs_lvl2) ||
+        (min_cache_size > (info->size_dpfs_lvl1 << (3 + info->log_dpfs_lvl2))))
+        return false;
+    
+    // copy full lvl2_0 to cache
+    memcpy(cache, lvl2_0, min_cache_size);
+    
+    // cherry-pick lvl2_1
+    u32 log_lvl2 = info->log_dpfs_lvl2;
+    for (u32 i = 0; (i << (3 + log_lvl2)) < min_cache_size; i += 4) {
+        u32 dword = *(u32*) (void*) (lvl1 + i);
+        for (u32 b = 0; b < 32; b++) {
+            if ((dword >> (31 - b)) & 1) {
+                u32 offset = ((i << 3) + b) << log_lvl2;
+                memcpy(cache + offset, lvl2_1 + offset, 1 << log_lvl2);
+            }
+        }
+    }
+    
+    info->dpfs_lvl2_cache = cache;
+    return true;
 }
 
 bool getDisaDiffReaderInfo(DisaDiffReaderInfo* info, void* data, u32 data_size, bool partitionB) {
@@ -114,7 +182,9 @@ bool getDisaDiffReaderInfo(DisaDiffReaderInfo* info, void* data, u32 data_size, 
     DpfsDescriptor* dpfs = &(difis->dpfs);
     if ((dpfs->offset_lvl1 + dpfs->size_lvl1 > dpfs->offset_lvl2) ||
         (dpfs->offset_lvl2 + dpfs->size_lvl2 > dpfs->offset_lvl3) ||
-        (dpfs->offset_lvl3 + dpfs->size_lvl3 > size_partition))
+        (dpfs->offset_lvl3 + dpfs->size_lvl3 > size_partition) ||
+        (2 > dpfs->log_lvl2) || (dpfs->log_lvl2 > dpfs->log_lvl3) ||
+        !dpfs->size_lvl1 || !dpfs->size_lvl2 || !dpfs->size_lvl3)
         return false;
     info->offset_dpfs_lvl1 = (u32) (offset_partition + dpfs->offset_lvl1);
     info->offset_dpfs_lvl2 = (u32) (offset_partition + dpfs->offset_lvl2);
@@ -149,6 +219,7 @@ bool getDisaDiffReaderInfo(DisaDiffReaderInfo* info, void* data, u32 data_size, 
 int main(int argc, char** argv) {
     u8* buffer_in = (u8*) malloc(BUFFER_SIZE);
     u8* buffer_out = (u8*) malloc(BUFFER_SIZE>>1);
+    u8* cache_lvl2 = (u8*) malloc(BUFFER_SIZE>>3);
     char* path_in = argv[1];
     char* path_out = argv[2];
     FILE* fp;
@@ -176,6 +247,10 @@ int main(int argc, char** argv) {
     printf("DPFS lvl2: 0x%08X byte @ 0x%08X / blocks: %u\n", info.size_dpfs_lvl2, info.offset_dpfs_lvl2, 1 << info.log_dpfs_lvl2);
     printf("DPFS lvl3: 0x%08X byte @ 0x%08X / blocks: %u\n", info.size_dpfs_lvl3, info.offset_dpfs_lvl3, 1 << info.log_dpfs_lvl3);
     printf("IVFC lvl4: 0x%08X byte @ 0x%08X / %sternal\n", info.size_ivfc_lvl4, info.offset_ivfc_lvl4, (info.ivfc_use_extlvl4) ? "ex" : "in");
+    
+    printf("Build DPFS lvl2 cache... ");
+    if (!buildDpfsLvl2Cache(&info, buffer_in, cache_lvl2, BUFFER_SIZE>>3)) return 1;
+    printf("OK\n");
     
     printf("Read IVFC lvl4... ");
     if (!readIvfcLvl4(buffer_out, buffer_in, &info, 0, info.size_ivfc_lvl4)) return 1;

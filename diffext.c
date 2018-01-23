@@ -65,22 +65,39 @@ u32 readIvfcLvl4(u8* output, const u8* data, const DisaDiffReaderInfo* info, u32
     if (info->ivfc_use_extlvl4) {
         u8* data_lvl4 = (u8*) data + info->offset_ivfc_lvl4;
         memcpy(output, data_lvl4 + offset, size);
-    }
+        return size;
+    } else if (!info->dpfs_lvl2_cache) return 0;
+    
+    // full reading in standard case
+    const u32 offset_start = info->offset_ivfc_lvl4 + offset;
+    const u32 offset_end = offset_start + size;
+    const u8* lvl2 = info->dpfs_lvl2_cache;
+    const u8* lvl3_0 = (u8*) data + info->offset_dpfs_lvl3;
+    const u8* lvl3_1 = lvl3_0 + info->size_dpfs_lvl3;
+    const u32 log_lvl3 = info->log_dpfs_lvl3;
+    
+    u32 read_start = offset_start;
+    u32 read_end = read_start;
+    u32 bit_state = 0;
     
     // full reading below
-    u32 offset_in_lvl3 = info->offset_ivfc_lvl4 + offset;
-    u8* lvl2 = info->dpfs_lvl2_cache;
-    if (!lvl2) return 0;
-    
-    for (u32 i = 0; i < size; i++) {
+    while (read_start < offset_end) {
+        // read bits until bit_state does not match
         // idx_lvl2 is a bit offset
-        u32 idx_lvl2 = (offset_in_lvl3 + i) >> info->log_dpfs_lvl3;
-        
-        u8* lvl3 = (u8*) data + info->offset_dpfs_lvl3;
-        if (GET_DPFS_BIT(idx_lvl2, lvl2)) lvl3 += info->size_dpfs_lvl3;
-        
-        u8* data_lvl4 = lvl3 + info->offset_ivfc_lvl4;
-        output[i] = data_lvl4[offset + i];
+        u32 idx_lvl2 = read_end >> log_lvl3;
+        if (GET_DPFS_BIT(idx_lvl2, lvl2) == bit_state) {
+            read_end = (idx_lvl2+1) << log_lvl3;
+            if (read_end >= offset_end) read_end = offset_end;
+            else continue;
+        }
+        // read data if there is any
+        if (read_start < read_end) {
+            const u8* lvl3 = bit_state ? lvl3_1 : lvl3_0;
+            memcpy(output + (read_start - offset_start), lvl3 + read_start, read_end - read_start);
+            read_start = read_end;
+        }
+        // flip the bit_state
+        bit_state = ~bit_state & 0x1;
     }
     
     return size;
